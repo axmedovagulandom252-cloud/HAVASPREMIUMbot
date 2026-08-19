@@ -1,5 +1,8 @@
 import asyncio
+import os
 import re
+
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
@@ -7,6 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from config import BOT_TOKEN, MANAGER_ID, CARD_NUMBER, CARD_OWNER
 
@@ -104,7 +108,7 @@ def hall_keyboard():
 
 
 # ==================================================
-# YANGI ZAKAZNI BOSHLASH
+# YANGI ZAKAZ
 # ==================================================
 
 async def start_new_order(
@@ -282,7 +286,6 @@ async def confirm_hall(
 
 # ==================================================
 # ISM
-# FAQAT HARFLAR
 # ==================================================
 
 @dp.message(Order.name)
@@ -331,7 +334,6 @@ async def get_name(
 
 # ==================================================
 # TELEFON
-# FAQAT RAQAMLAR
 # ==================================================
 
 @dp.message(Order.phone)
@@ -377,7 +379,6 @@ async def get_phone(
 
 # ==================================================
 # SANA
-# FAQAT DD.MM.YYYY
 # ==================================================
 
 @dp.message(Order.date)
@@ -452,7 +453,6 @@ async def get_date(
 
 # ==================================================
 # CHEK
-# FAQAT RASM
 # ==================================================
 
 @dp.message(Order.payment)
@@ -547,13 +547,11 @@ async def payment_result(
 
         await bot.send_message(
             user_id,
-
             "✅ TO'LOV TASDIQLANDI!\n\n"
             "🎉 To'yxonangiz muvaffaqiyatli "
             "band qilindi.\n\n"
             "Yana zakaz qilmoqchi bo'lsangiz, "
             "pastdagi tugmani bosing.",
-
             reply_markup=keyboard
         )
 
@@ -586,10 +584,8 @@ async def payment_result(
 
         await bot.send_message(
             user_id,
-
             "❌ TO'LOV TASDIQLANMADI!\n\n"
             "Iltimos, chekni qayta yuboring.",
-
             reply_markup=keyboard
         )
 
@@ -603,7 +599,7 @@ async def payment_result(
 
 
 # ==================================================
-# YANGI TO'YXONA ZAKAZI
+# YANGI ZAKAZ
 # ==================================================
 
 @dp.callback_query(
@@ -656,16 +652,102 @@ async def retry_payment(
 
 
 # ==================================================
-# BOTNI ISHGA TUSHIRISH
+# RENDER WEBHOOK
+# ==================================================
+
+async def on_startup():
+
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+
+    if not render_url:
+        raise RuntimeError(
+            "RENDER_EXTERNAL_URL topilmadi."
+        )
+
+    webhook_url = render_url.rstrip("/") + "/webhook"
+
+    await bot.delete_webhook(
+        drop_pending_updates=True
+    )
+
+    await bot.set_webhook(
+        webhook_url
+    )
+
+    print("🤖 BOT ISHGA TUSHDI...")
+    print("Webhook:", webhook_url)
+
+
+async def on_shutdown():
+
+    await bot.delete_webhook()
+    await bot.session.close()
+
+
+# ==================================================
+# WEB SERVER
+# ==================================================
+
+def create_app():
+
+    app = web.Application()
+
+    SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot
+    ).register(
+        app,
+        path="/webhook"
+    )
+
+    setup_application(
+        app,
+        dp,
+        bot=bot
+    )
+
+    return app
+
+
+# ==================================================
+# ISHGA TUSHIRISH
 # ==================================================
 
 async def main():
 
-    print("🤖 BOT ISHGA TUSHDI...")
+    app = create_app()
 
-    await dp.start_polling(bot)
+    app.on_startup.append(
+        lambda app: on_startup()
+    )
+
+    app.on_cleanup.append(
+        lambda app: on_shutdown()
+    )
+
+    port = int(
+        os.getenv("PORT", "10000")
+    )
+
+    print(f"🌐 Server port: {port}")
+
+    runner = web.AppRunner(app)
+
+    await runner.setup()
+
+    site = web.TCPSite(
+        runner,
+        "0.0.0.0",
+        port
+    )
+
+    await site.start()
+
+    print("🚀 WEBHOOK SERVER ISHLAYAPTI!")
+
+    while True:
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
-
     asyncio.run(main())
